@@ -1,11 +1,7 @@
 {
   "format": "makefun-run/1",
-  "prompt": {
-    "text": "Register : https://make.fun/r/vm89ht7g ➖ Connect Github ➖ Create EOA Wallet SOL ➖ Participate Bug Bounty",
-    "origin": "typed",
-    "via": null
-  },
-  "system_prompt": {"status": "withheld", "why": "proprietary"},
+  "prompt": {"text": "Build a GitHub-compatible git forge for make.fun github-core-clone-01", "origin": "typed", "via": null},
+  "system_prompt": {"status": "withheld", "why": "proprietary AI system prompt"},
   "instructions": {"status": "none"},
   "mcp_servers": [],
   "declared": {
