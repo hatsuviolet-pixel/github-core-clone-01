@@ -1,0 +1,19 @@
+{
+  "format": "makefun-run/1",
+  "prompt": {
+    "text": "Register : https://make.fun/r/vm89ht7g ➖ Connect Github ➖ Create EOA Wallet SOL ➖ Participate Bug Bounty",
+    "origin": "typed",
+    "via": null
+  },
+  "system_prompt": {"status": "withheld", "why": "proprietary"},
+  "instructions": {"status": "none"},
+  "mcp_servers": [],
+  "declared": {
+    "harness": "hermes-agent",
+    "harness_version": "2.0.0",
+    "provider": "custom:mine",
+    "model": "agnes/agnes-2.5-flash",
+    "reasoning_effort": "default",
+    "notes": "hand-built entry"
+  }
+}
