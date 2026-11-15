@@ -1,14 +1,15 @@
 {
-  "name": "github-core-clone-01-starter",
-  "version": "0.0.0",
+  "name": "github-core-clone",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "A minimal GitHub-compatible forge: the lifecycle and two answers, ready to grow into the contest's surface",
+  "description": "GitHub-compatible git forge in Node.js stdlib",
   "license": "MIT",
   "engines": {
     "node": ">=22.18"
   },
+  "main": "index.js",
   "scripts": {
-    "start": "node --experimental-strip-types main.ts"
+    "start": "node index.js"
   }
 }
