@@ -34,6 +34,11 @@ interface PullRequest { id: number; number: number; repo_id: number; title: stri
 interface Label { id: number; repo_id: number; name: string; color: string; description: string; }
 interface Comment { id: number; body: string; creator: string; created_at: string; }
 
+// ─── Performance caches ──────────────────────────────────────────────────────
+let cacheDirty = true;
+
+function invalidateCache() { cacheDirty = true; }
+
 // ─── Store ───────────────────────────────────────────────────────────────────
 let nextId = 1;
 const counter = () => ++nextId;
@@ -65,6 +70,7 @@ class ForgeStore {
     };
     this.repos.set(id, repo);
     this.byName.set(repo.full_name, repo);
+    invalidateCache();
     return repo;
   }
 
@@ -76,6 +82,7 @@ class ForgeStore {
     const num = repo.issueCounter++;
     const issue: Issue = { id: counter(), number: num, repo_id: repo.id, title, body, state: 'open', labels: labelNames, creator, created_at: this.now(), updated_at: this.now() };
     this.issues.set(issue.id, issue);
+    invalidateCache();
     return issue;
   }
 
@@ -83,12 +90,14 @@ class ForgeStore {
     const num = repo.prCounter++;
     const pr: PullRequest = { id: counter(), number: num, repo_id: repo.id, title, body, state: 'open', head, base, merged: false, creator, created_at: this.now(), updated_at: this.now() };
     this.prs.set(pr.id, pr);
+    invalidateCache();
     return pr;
   }
 
   createLabel(repo: Repo, name: string, color = 'cccccc'): Label {
     const lbl: Label = { id: counter(), repo_id: repo.id, name, color, description: '' };
     this.labels.set(lbl.id, lbl);
+    invalidateCache();
     return lbl;
   }
 
@@ -101,6 +110,7 @@ class ForgeStore {
     repo.refs.set(pr.base.ref, { sha: commitSha });
     repo.head = commitSha;
     pr.merge_commit_sha = commitSha;
+    invalidateCache();
     return commitSha;
   }
 
@@ -152,6 +162,10 @@ function shaOf(type: string, data: Buffer): string {
 
 // ─── Shared store instance ───────────────────────────────────────────────────
 const store = new ForgeStore();
+
+// ─── Pre-built static responses ──────────────────────────────────────────────
+const HEALTHZ_JSON = '{"ok":true}\n';
+const API_ROOT_JSON = '{"current_user_url":"/api/v3/user","rate_limit_url":"/api/v3/rate_limit"}\n';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function sendJson(res: ServerResponse, status: number, body: any, extra: Record<string, string> = {}): void {
@@ -326,9 +340,10 @@ export function createApp(): Server {
 
     res_temp = res;
 
-    // Health check
+    // Health check — fastest path
     if (method === 'GET' && path === '/healthz') {
-      sendJson(res, 200, { ok: true });
+      res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(HEALTHZ_JSON) });
+      res.end(HEALTHZ_JSON);
       return;
     }
 
@@ -369,9 +384,11 @@ async function handleRest(s: ForgeStore, req: IncomingMessage, res: ServerRespon
   const url = new URL(req.url ?? '/', 'http://entry');
   const path = url.pathname;
 
-  // GET /api/v3/ 
+  // GET /api/v3/
   if ((method === 'GET' || method === 'HEAD') && (path === '/api/v3/' || path === '/api/v3')) {
-    sendJson(res, 200, { current_user_url: '/api/v3/user', rate_limit_url: '/api/v3/rate_limit' }, { 'x-oauth-scopes': 'repo, read:org' });
+    const h = { 'content-type': 'application/json; charset=utf-8', 'x-oauth-scopes': 'repo, read:org', 'content-length': Buffer.byteLength(API_ROOT_JSON) };
+    res.writeHead(200, h);
+    res.end(API_ROOT_JSON);
     return;
   }
 
@@ -589,19 +606,21 @@ async function handleGit(s: ForgeStore, req: IncomingMessage, res: ServerRespons
   const isReceivePack = suffix.includes('git-receive-pack') || suffix === '';
   const isInfoRefs = suffix === '/info/refs' || suffix.includes('info/refs');
 
-  // info/refs
+    // info/refs
   if (isInfoRefs) {
     const acceptV2 = req.headers['git-protocol'] === 'version=2';
     const defaultSha = repo.refs.get(repo.default_branch)?.sha || '';
     if (acceptV2) {
-      const ads = 'version 2\nsymref HEAD:refs/heads/' + repo.default_branch + '\nreport-status-v2\ndeepen-since\ndeepen-not\ndeepen-relative-tags\nallow-fetch-head\nfilter\natomic\nside-band-64k\nofs-delta\nagent\n\n';
-      res.writeHead(200, { 'content-type': 'application/x-git-' + (isUploadPack ? 'upload-pack' : 'receive-pack') + '-advertisement' });
-      res.end(Buffer.from(ads));
+      const ads = `version 2\nsymref HEAD:refs/heads/${repo.default_branch}\nreport-status-v2\ndeepen-since\ndeepen-not\ndeepen-relative-tags\nallow-fetch-head\nfilter\natomic\nside-band-64k\nofs-delta\nagent\n\n`;
+      const buf = Buffer.from(ads);
+      res.writeHead(200, { 'content-type': `application/x-git-${isUploadPack ? 'upload-pack' : 'receive-pack'}-advertisement`, 'content-length': buf.length });
+      res.end(buf);
     } else {
-      const line = defaultSha + '\trefs/heads/' + repo.default_branch + '\n0000';
-      const preamble = '# service=git-' + (isUploadPack ? 'upload-pack' : 'receive-pack') + '\n';
-      const buf = Buffer.from(preamble + '0000\n' + line + '\n0000');
-      res.writeHead(200, { 'content-type': 'application/x-git-' + (isUploadPack ? 'upload-pack' : 'receive-pack') + '-advertisement' });
+      const line = `${defaultSha}\trefs/heads/${repo.default_branch}\n0000`;
+      const preamble = `# service=git-${isUploadPack ? 'upload-pack' : 'receive-pack'}\n`;
+      const combined = `${preamble}0000\n${line}\n0000`;
+      const buf = Buffer.from(combined);
+      res.writeHead(200, { 'content-type': `application/x-git-${isUploadPack ? 'upload-pack' : 'receive-pack'}-advertisement`, 'content-length': buf.length });
       res.end(buf);
     }
     return;
@@ -611,29 +630,16 @@ async function handleGit(s: ForgeStore, req: IncomingMessage, res: ServerRespons
   if (isUploadPack) {
     const acceptV2 = req.headers['git-protocol'] === 'version=2';
     if (acceptV2) {
-      // V2: version line + capabilities
       const defaultSha = repo.refs.get(repo.default_branch)?.sha || '';
-      const ads = 'version 2\n' +
-        'symref HEAD:refs/heads/' + repo.default_branch + '\n' +
-        'report-status-v2\n' +
-        'deepen-since\n' +
-        'deepen-not\n' +
-        ' deepen-relative-tags\n' +
-        ' allow-fetch-head\n' +
-        ' filter\n' +
-        ' atomic\n' +
-        ' side-band-64k\n' +
-        ' ofs-delta\n' +
-        ' agent\n' +
-        '\n';
-      res.writeHead(200, { 'content-type': 'application/x-git-upload-pack-result' });
-      res.end(Buffer.from(ads));
+      const ads = `version 2\nsymref HEAD:refs/heads/${repo.default_branch}\nreport-status-v2\ndeepen-since\ndeepen-not\n deepen-relative-tags\n allow-fetch-head\n filter\n atomic\n side-band-64k\n ofs-delta\n agent\n\n`;
+      const buf = Buffer.from(ads);
+      res.writeHead(200, { 'content-type': 'application/x-git-upload-pack-result', 'content-length': buf.length });
+      res.end(buf);
     } else {
-      // V0 advertisement
       const defaultSha = repo.refs.get(repo.default_branch)?.sha || '';
-      const line = defaultSha + '\trefs/heads/' + repo.default_branch + '\n0000';
-      const buf = Buffer.from('# service=git-upload-pack\n0000\n' + line + '\n0000');
-      res.writeHead(200, { 'content-type': 'application/x-git-upload-pack-advertisement' });
+      const line = `${defaultSha}\trefs/heads/${repo.default_branch}\n0000`;
+      const buf = Buffer.from(`# service=git-upload-pack\n0000\n${line}\n0000`);
+      res.writeHead(200, { 'content-type': 'application/x-git-upload-pack-advertisement', 'content-length': buf.length });
       res.end(buf);
     }
     return;
@@ -642,8 +648,9 @@ async function handleGit(s: ForgeStore, req: IncomingMessage, res: ServerRespons
   // receive-pack (push)
   if (isReceivePack) {
     const ads = '# service=git-receive-pack\n0000\nreport-status\nreport-status-v2\ndelete-refs\nside-band-64k\n0000';
-    res.writeHead(200, { 'content-type': 'application/x-git-receive-pack-advertisement' });
-    res.end(Buffer.from(ads));
+    const buf = Buffer.from(ads);
+    res.writeHead(200, { 'content-type': 'application/x-git-receive-pack-advertisement', 'content-length': buf.length });
+    res.end(buf);
     return;
   }
 
@@ -660,8 +667,12 @@ async function handleGit(s: ForgeStore, req: IncomingMessage, res: ServerRespons
       res.writeHead(200, { 'content-type': 'application/octet-stream' });
       res.end((obj as BlobObj).content);
     } else if ('entries' in obj) {
+      // Efficient tree serialization with Buffer.concat
+      const entries = (obj as TreeObj).entries;
+      const parts: Buffer[] = [];
+      for (const e of entries) parts.push(Buffer.from(`${e.mode} ${e.name}\0${e.sha}`));
       res.writeHead(200, { 'content-type': 'application/octet-stream' });
-      res.end((obj as TreeObj).entries.reduce((b: Buffer, e: TreeEntry) => Buffer.concat([b, Buffer.from(`${e.mode} ${e.name}\0${e.sha}`)]), Buffer.from('')));
+      res.end(Buffer.concat(parts));
     } else if ('treeSha' in obj) {
       res.writeHead(200, { 'content-type': 'application/octet-stream' });
       const c = obj as CommitObj;
